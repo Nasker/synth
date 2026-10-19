@@ -35,6 +35,9 @@ typedef struct {
     volatile float delay_fb;       // 0..0.95
     volatile float delay_mix;      // 0..0.5 wet
     volatile float delay_damp;     // 0..1 darkening in feedback
+    // bus compressor
+    volatile float comp_thresh;    // 0.3..1 onset level
+    volatile float comp_ratio;     // 1..10
     volatile float master;         // 0..1
 } synth_params_t;
 

@@ -51,7 +51,9 @@ static synth_params_t s_params = {
     .delay_fb   = 0.35f,
     .delay_mix  = 0.18f,
     .delay_damp = 0.4f,
-    .master     = 0.5f,
+    .comp_thresh = 0.6f,
+    .comp_ratio  = 3.0f,
+    .master     = 0.6f,
 };
 
 void synth_init(int sample_rate)

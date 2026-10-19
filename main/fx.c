@@ -16,11 +16,22 @@ static size_t s_buf_frames;   // ring size in frames
 static size_t s_wpos;
 static float  s_damp_l, s_damp_r;
 
+// bus compressor: feed-forward peak detector, soft-knee-ish ratio
+static float s_det_env;
+static float s_atk_c, s_rel_c;
+
 void fx_init(int sample_rate)
 {
     s_sr = sample_rate;
     s_buf_frames = (size_t)sample_rate * MAX_DELAY_MS / 1000;
     s_buf = heap_caps_calloc(s_buf_frames * 2, sizeof(float), MALLOC_CAP_SPIRAM);
+    s_atk_c = expf(-1.f / (0.002f * sample_rate));   // ~2ms attack
+    s_rel_c = expf(-1.f / (0.2f   * sample_rate));   // ~200ms release
+}
+
+static inline float soft_clip(float x)
+{
+    return x * (27.f + x * x) / (27.f + 9.f * x * x);
 }
 
 void fx_process(float *buf, size_t frames)
@@ -64,5 +75,24 @@ void fx_process(float *buf, size_t frames)
 
         rpos  = (rpos + 1) % s_buf_frames;
         s_wpos = (s_wpos + 1) % s_buf_frames;
+    }
+
+    // ---- bus compressor (stereo-linked detector) ----
+    const float T = synth_params()->comp_thresh;
+    const float R = synth_params()->comp_ratio > 1.f ? synth_params()->comp_ratio : 1.f;
+    for (size_t i = 0; i < frames; i++) {
+        float l = buf[2 * i], r = buf[2 * i + 1];
+        float pk = fabsf(l) > fabsf(r) ? fabsf(l) : fabsf(r);
+        float c = pk > s_det_env ? s_atk_c : s_rel_c;
+        s_det_env = c * s_det_env + (1.f - c) * pk;
+        if (s_det_env < 1e-15f) s_det_env = 0.f;
+
+        float g = 1.f;
+        if (s_det_env > T) {
+            float out = T + (s_det_env - T) / R;
+            g = out / s_det_env;
+        }
+        buf[2 * i]     = soft_clip(l * g);
+        buf[2 * i + 1] = soft_clip(r * g);
     }
 }

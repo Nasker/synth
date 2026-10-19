@@ -44,6 +44,8 @@ static void apply_param(const char *name, double value)
     else if (!strcmp(name, "delay_fb"))  p->delay_fb   = value;
     else if (!strcmp(name, "delay_mix")) p->delay_mix  = value;
     else if (!strcmp(name, "delay_damp"))p->delay_damp = value;
+    else if (!strcmp(name, "comp_thresh"))p->comp_thresh = value;
+    else if (!strcmp(name, "comp_ratio")) p->comp_ratio  = value;
     else if (!strcmp(name, "master"))    p->master     = value;
 }
 

@@ -13,12 +13,14 @@
 static const char *TAG = "audio";
 static i2s_chan_handle_t s_tx_chan;
 static volatile uint32_t s_blocks_rendered;
+static volatile uint32_t s_max_cycles;
 
 static void audio_task(void *arg)
 {
     static float fbuf[FRAMES_PER_CHUNK * 2];
     int16_t buf[FRAMES_PER_CHUNK * 2];
     while (1) {
+        uint32_t t0 = esp_cpu_get_cycle_count();
         synth_render(fbuf, FRAMES_PER_CHUNK);
         fx_process(fbuf, FRAMES_PER_CHUNK);
         for (int i = 0; i < FRAMES_PER_CHUNK * 2; i++) {
@@ -28,10 +30,20 @@ static void audio_task(void *arg)
             if (x < -1.f) x = -1.f;
             buf[i] = (int16_t)(x * 32767.f);
         }
+        uint32_t spent = esp_cpu_get_cycle_count() - t0;
+        if (spent > s_max_cycles) s_max_cycles = spent;
+
         size_t written = 0;
         i2s_channel_write(s_tx_chan, buf, sizeof(buf), &written, portMAX_DELAY);
         s_blocks_rendered++;
     }
+}
+
+uint32_t audio_max_cycles(void)
+{
+    uint32_t m = s_max_cycles;
+    s_max_cycles = 0;
+    return m;
 }
 
 uint32_t audio_blocks_rendered(void)

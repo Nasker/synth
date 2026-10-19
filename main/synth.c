@@ -98,10 +98,12 @@ static inline float poly_blep(float t, float dt)
     return 0.f;
 }
 
+#define PHASE_SCALE (1.f / 4294967296.f)   // exact: divisor is a power of two
+
 static inline float osc_sample(uint32_t phase, uint32_t inc, int wave)
 {
-    const float t  = phase / 4294967296.f;
-    const float dt = inc / 4294967296.f;
+    const float t  = phase * PHASE_SCALE;
+    const float dt = inc * PHASE_SCALE;
 
     switch (wave) {
     case SYNTH_WAVE_SAW:
@@ -122,30 +124,26 @@ static inline float osc_sample(uint32_t phase, uint32_t inc, int wave)
     }
 }
 
+// envelope rates for ADR stages are global — computed once per block
+static float s_arate, s_drate, s_rrate;
+
 static inline void env_step(voice_t *v)
 {
-    const float sr = (float)s_sample_rate;
     switch (v->env_stage) {
-    case ENV_ATTACK: {
-        float rate = 1.f / (s_params.attack_s * sr + 1.f);
-        v->env += rate;
+    case ENV_ATTACK:
+        v->env += s_arate;
         if (v->env >= 1.f) { v->env = 1.f; v->env_stage = ENV_DECAY; }
         break;
-    }
-    case ENV_DECAY: {
-        float rate = 1.f / (s_params.decay_s * sr + 1.f);
-        v->env -= rate;
+    case ENV_DECAY:
+        v->env -= s_drate;
         if (v->env <= s_params.sustain) { v->env = s_params.sustain; v->env_stage = ENV_SUSTAIN; }
         break;
-    }
     case ENV_SUSTAIN:
         break;
-    case ENV_RELEASE: {
-        float rate = 1.f / (s_params.release_s * sr + 1.f);
-        v->env -= rate;
+    case ENV_RELEASE:
+        v->env -= s_rrate;
         if (v->env <= 0.f) { v->env = 0.f; v->env_stage = ENV_IDLE; }
         break;
-    }
     default:
         break;
     }
@@ -248,6 +246,11 @@ void synth_render(float *stereo_buf, size_t frames)
     const bool  dual   = s_params.detune > 0.005f;
     const float gk     = s_params.glide_s > 0.0005f
                          ? 1.f / (s_params.glide_s * s_sample_rate + 1.f) : 1.f;
+    // envelope rates once per block — not per-sample divisions
+    const float sr_f = (float)s_sample_rate;
+    s_arate = 1.f / (s_params.attack_s  * sr_f + 1.f);
+    s_drate = 1.f / (s_params.decay_s   * sr_f + 1.f);
+    s_rrate = 1.f / (s_params.release_s * sr_f + 1.f);
 
     int active = 0;
     for (int v = 0; v < SYNTH_NUM_VOICES; v++) {
@@ -286,10 +289,20 @@ void synth_render(float *stereo_buf, size_t frames)
             ml += s * vc->pan_l;
             mr += s * vc->pan_r;
 
-            vc->phase  += (uint32_t)(vc->inc  * s_bend);
-            vc->phase2 += (uint32_t)(vc->inc2 * s_bend);
-            vc->inc  += (vc->inc_t  - vc->inc)  * gk;
-            vc->inc2 += (vc->inc2_t - vc->inc2) * gk;
+            if (s_bend != 1.f) {
+                vc->phase  += (uint32_t)(vc->inc  * s_bend);
+                vc->phase2 += (uint32_t)(vc->inc2 * s_bend);
+            } else {
+                vc->phase  += (uint32_t)vc->inc;
+                vc->phase2 += (uint32_t)vc->inc2;
+            }
+            if (gk < 1.f) {
+                vc->inc  += (vc->inc_t  - vc->inc)  * gk;
+                vc->inc2 += (vc->inc2_t - vc->inc2) * gk;
+            } else {
+                vc->inc = vc->inc_t;
+                vc->inc2 = vc->inc2_t;
+            }
             env_step(vc);
         }
         if (fabsf(ml) < 1e-15f) ml = 0.f;

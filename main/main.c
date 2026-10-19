@@ -18,12 +18,14 @@ static void stats_task(void *arg)
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(10000));
         uint32_t blocks = audio_blocks_rendered();
-        ESP_LOGI("stats", "heap int:%u(min:%u) psram:%u | voices:%d | blocks/10s:%lu",
+        uint32_t max_cyc = audio_max_cycles();
+        ESP_LOGI("stats", "heap int:%u(min:%u) psram:%u | voices:%d | blocks/10s:%lu | render max:%luus/5.8ms",
                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
                  (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL),
                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
                  synth_active_voices(),
-                 (unsigned long)(blocks - last_blocks));
+                 (unsigned long)(blocks - last_blocks),
+                 (unsigned long)(max_cyc / 240));
         last_blocks = blocks;
     }
 }

@@ -12,3 +12,4 @@
 
 void audio_start(void);
 uint32_t audio_blocks_rendered(void);   // for stall diagnostics
+uint32_t audio_max_cycles(void);        // max cycles/block since last call (reads+clears)

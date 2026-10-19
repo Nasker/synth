@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>esp32-s3 synth</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+  body { background: #141518; color: #ddd; font: 13px/1.4 system-ui, sans-serif;
+         display: flex; flex-direction: column; align-items: center; padding: 14px; gap: 14px;
+         user-select: none; touch-action: manipulation; }
+  h1 { font-size: 15px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: #888; }
+  h2 { font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: #5b8bd6; margin-bottom: 8px; }
+  #status { font-size: 12px; color: #666; }
+  #status::before { content: "●"; margin-right: 6px; }
+  #status.on { color: #6f6; } #status.off { color: #f66; }
+  .panel { width: 100%; max-width: 420px; background: #1d1f24; border-radius: 12px; padding: 12px 14px; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 16px; }
+  .waves { display: flex; gap: 8px; margin-bottom: 10px; }
+  .waves button, .oct button { flex: 1; padding: 9px 0; border: 1px solid #333; border-radius: 8px;
+                  background: #23262b; color: #aaa; font-size: 13px; cursor: pointer; }
+  .waves button.active { background: #3b82f6; border-color: #3b82f6; color: #fff; }
+  .slider label { display: flex; justify-content: space-between; font-size: 11px;
+                  color: #999; margin-bottom: 2px; }
+  .slider input { width: 100%; accent-color: #3b82f6; }
+  .oct { display: flex; gap: 8px; }
+  .oct button { flex: none; padding: 9px 18px; font-size: 15px; }
+  #octval { flex: 1; text-align: center; align-self: center; color: #888; }
+  #keys { position: relative; height: 150px; max-width: 420px; width: 100%; }
+  .key { position: absolute; top: 0; border: 1px solid #111; border-radius: 0 0 4px 4px;
+         cursor: pointer; }
+  .key.w { background: #eee; height: 100%; z-index: 1; }
+  .key.w.down { background: #9cf; }
+  .key.b { background: #111; height: 60%; z-index: 2; border-radius: 0 0 3px 3px; }
+  .key.b.down { background: #3b82f6; }
+</style>
+</head>
+<body>
+<h1>esp32-s3 synth</h1>
+<div id="status" class="off">disconnected</div>
+
+<div class="panel">
+  <h2>oscillator</h2>
+  <div class="waves">
+    <button data-w="0">sine</button>
+    <button data-w="1" class="active">saw</button>
+    <button data-w="2">square</button>
+    <button data-w="3">tri</button>
+  </div>
+  <div class="grid">
+    <div class="slider"><label>detune <span id="v-detune">0.25</span></label>
+      <input id="p-detune" type="range" min="0" max="1" step="0.01" value="0.25"></div>
+    <div class="slider"><label>spread <span id="v-spread">0.70</span></label>
+      <input id="p-spread" type="range" min="0" max="1" step="0.01" value="0.7"></div>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>filter</h2>
+  <div class="grid">
+    <div class="slider"><label>cutoff <span id="v-cutoff">0.70</span></label>
+      <input id="p-cutoff" type="range" min="0" max="1" step="0.01" value="0.7"></div>
+    <div class="slider"><label>resonance <span id="v-reso">0.20</span></label>
+      <input id="p-reso" type="range" min="0" max="1" step="0.01" value="0.2"></div>
+    <div class="slider"><label>lfo rate <span id="v-lfo_rate">0.40</span></label>
+      <input id="p-lfo_rate" type="range" min="0.01" max="20" step="0.01" value="0.4"></div>
+    <div class="slider"><label>lfo depth <span id="v-lfo_depth">0.00</span></label>
+      <input id="p-lfo_depth" type="range" min="0" max="1" step="0.01" value="0"></div>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>envelope</h2>
+  <div class="grid">
+    <div class="slider"><label>attack <span id="v-attack">0.010</span></label>
+      <input id="p-attack" type="range" min="0.001" max="2" step="0.001" value="0.01"></div>
+    <div class="slider"><label>decay <span id="v-decay">0.150</span></label>
+      <input id="p-decay" type="range" min="0.001" max="2" step="0.001" value="0.15"></div>
+    <div class="slider"><label>sustain <span id="v-sustain">0.70</span></label>
+      <input id="p-sustain" type="range" min="0" max="1" step="0.01" value="0.7"></div>
+    <div class="slider"><label>release <span id="v-release">0.250</span></label>
+      <input id="p-release" type="range" min="0.005" max="3" step="0.005" value="0.25"></div>
+    <div class="slider"><label>glide <span id="v-glide">0.000</span></label>
+      <input id="p-glide" type="range" min="0" max="0.8" step="0.005" value="0"></div>
+    <div class="slider"><label>master <span id="v-master">0.50</span></label>
+      <input id="p-master" type="range" min="0" max="1" step="0.01" value="0.5"></div>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>delay</h2>
+  <div class="grid">
+    <div class="slider"><label>time ms <span id="v-delay_ms">380</span></label>
+      <input id="p-delay_ms" type="range" min="0" max="1200" step="10" value="380"></div>
+    <div class="slider"><label>feedback <span id="v-delay_fb">0.35</span></label>
+      <input id="p-delay_fb" type="range" min="0" max="0.95" step="0.01" value="0.35"></div>
+    <div class="slider"><label>mix <span id="v-delay_mix">0.18</span></label>
+      <input id="p-delay_mix" type="range" min="0" max="0.5" step="0.01" value="0.18"></div>
+    <div class="slider"><label>damping <span id="v-delay_damp">0.40</span></label>
+      <input id="p-delay_damp" type="range" min="0" max="1" step="0.01" value="0.4"></div>
+  </div>
+</div>
+
+<div class="panel oct">
+  <button id="octdown">−</button>
+  <div id="octval">octave 4</div>
+  <button id="octup">+</button>
+</div>
+
+<div id="keys"></div>
+
+<script>
+const statusEl = document.getElementById('status');
+let ws;
+
+function connect() {
+  ws = new WebSocket(`ws://${location.host}/ws`);
+  ws.onopen  = () => { statusEl.textContent = 'connected'; statusEl.className = 'on'; };
+  ws.onclose = () => { statusEl.textContent = 'reconnecting…'; statusEl.className = 'off';
+                      setTimeout(connect, 1500); };
+}
+connect();
+
+function send(obj) {
+  if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
+}
+const param = (name, value) => send({type: 'param', name, value});
+
+document.querySelectorAll('.waves button').forEach(b => {
+  b.addEventListener('click', () => {
+    document.querySelectorAll('.waves button').forEach(x => x.classList.remove('active'));
+    b.classList.add('active');
+    param('wave', +b.dataset.w);
+  });
+});
+
+// every slider with id p-<name> sends param <name> and updates label v-<name>
+document.querySelectorAll('input[id^="p-"]').forEach(el => {
+  const name = el.id.slice(2);
+  const lb = document.getElementById('v-' + name);
+  el.addEventListener('input', () => {
+    const v = parseFloat(el.value);
+    lb.textContent = el.step.includes('.') ? v.toFixed(2) : v;
+    if (name === 'attack' || name === 'decay' || name === 'release' || name === 'glide')
+      lb.textContent = v.toFixed(3);
+    param(name, v);
+  });
+});
+
+// piano with octave shift: base = lowest C shown, one octave + one
+let base = 60;   // C4
+const keysEl = document.getElementById('keys');
+const held = new Set();
+
+function buildKeys() {
+  keysEl.innerHTML = '';
+  const whites = [], blacks = [];
+  for (let n = base; n <= base + 12; n++) {
+    ([1,3,6,8,10].includes(n % 12) ? blacks : whites).push(n);
+  }
+  const wPct = 100 / whites.length;
+  whites.forEach((n, i) => {
+    const k = document.createElement('div');
+    k.className = 'key w';
+    k.style.left = i * wPct + '%';
+    k.style.width = wPct + '%';
+    k.dataset.note = n;
+    keysEl.appendChild(k);
+  });
+  blacks.forEach(n => {
+    const k = document.createElement('div');
+    k.className = 'key b';
+    const i = whites.indexOf(n - 1);
+    k.style.left = (i + 1) * wPct - wPct * 0.3 + '%';
+    k.style.width = wPct * 0.6 + '%';
+    k.dataset.note = n;
+    keysEl.appendChild(k);
+  });
+}
+buildKeys();
+
+document.getElementById('octup').addEventListener('click', () => {
+  if (base <= 84) { base += 12; buildKeys();
+    document.getElementById('octval').textContent = 'octave ' + (base / 12 - 1); }
+});
+document.getElementById('octdown').addEventListener('click', () => {
+  if (base >= 36) { base -= 12; buildKeys();
+    document.getElementById('octval').textContent = 'octave ' + (base / 12 - 1); }
+});
+
+function press(k, on) {
+  const n = +k.dataset.note;
+  if (on && !held.has(n)) { held.add(n); k.classList.add('down'); send({type:'note_on', note:n, vel:0.8}); }
+  if (!on && held.has(n)) { held.delete(n); k.classList.remove('down'); send({type:'note_off', note:n}); }
+}
+keysEl.addEventListener('pointerdown', e => { if (e.target.dataset.note) press(e.target, true); });
+keysEl.addEventListener('pointerup',   e => { if (e.target.dataset.note) press(e.target, false); });
+keysEl.addEventListener('pointercancel', () => keysEl.querySelectorAll('.down').forEach(k => press(k, false)));
+keysEl.addEventListener('pointerleave', e => { if (e.target.dataset.note) press(e.target, false); });
+document.addEventListener('contextmenu', e => e.preventDefault());
+</script>
+</body>
+</html>

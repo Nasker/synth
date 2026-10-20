@@ -26,6 +26,7 @@ static float *s_chbuf;        // stereo, internal RAM
 static size_t s_ch_frames;
 static size_t s_ch_w;
 static float  s_ch_lfo;
+static int16_t s_sin_lut[256];  // chorus LFO table — replaces per-sample sinf
 
 // ---- freeverb: 8 combs + 4 allpasses per channel, PSRAM ----
 typedef struct { float *buf; int len, idx; float lp; } comb_t;
@@ -61,13 +62,19 @@ void fx_init(int sample_rate)
     float *p = pool;
     for (int c = 0; c < 2; c++) {
         for (int i = 0; i < 8; i++) {
-            s_combs[c][i].len = s_comb_len[i] + (c ? REV_SPREAD : 0);
+            // tanks run at half rate — halving the length preserves the
+            // exact delay time and feedback decay of the 44.1k tuning
+            s_combs[c][i].len = (s_comb_len[i] + (c ? REV_SPREAD : 0)) / 2;
             s_combs[c][i].buf = p;  p += s_combs[c][i].len;
         }
         for (int i = 0; i < 4; i++) {
-            s_allps[c][i].len = s_allp_len[i] + (c ? REV_SPREAD : 0);
+            s_allps[c][i].len = (s_allp_len[i] + (c ? REV_SPREAD : 0)) / 2;
             s_allps[c][i].buf = p;  p += s_allps[c][i].len;
         }
+    }
+
+    for (int i = 0; i < 256; i++) {
+        s_sin_lut[i] = (int16_t)(sinf(2.f * (float)M_PI * i / 256.f) * 32767.f);
     }
 
     s_atk_c = expf(-1.f / (0.002f * sample_rate));   // ~2ms attack
@@ -125,8 +132,11 @@ void fx_process(float *buf, size_t frames)
         for (size_t i = 0; i < frames; i++) {
             s_ch_lfo += lfo_i;
             if (s_ch_lfo >= 1.f) s_ch_lfo -= 1.f;
-            float tap_l = base + mod * (0.5f + 0.5f * sinf(TWO_PI * s_ch_lfo));
-            float tap_r = base + mod * (0.5f + 0.5f * sinf(TWO_PI * s_ch_lfo + (float)M_PI_2));
+            uint8_t ph = (uint8_t)(s_ch_lfo * 256.f);
+            float lf_l = s_sin_lut[ph] * (1.f / 32768.f);
+            float lf_r = s_sin_lut[(uint8_t)(ph + 64)] * (1.f / 32768.f);  // quadrature
+            float tap_l = base + mod * (0.5f + 0.5f * lf_l);
+            float tap_r = base + mod * (0.5f + 0.5f * lf_r);
 
             float in_l = buf[2 * i], in_r = buf[2 * i + 1];
             s_chbuf[2 * s_ch_w]     = in_l;
@@ -184,15 +194,19 @@ void fx_process(float *buf, size_t frames)
         }
     }
 
-    // ---- freeverb ----
+    // ---- freeverb, half rate ----
+    // Tanks run on every other sample and the wet output is held —
+    // halves both the ALU cost and the PSRAM traffic for an inaudible
+    // change in a dark, diffuse path.
     const float rwet = fx->rev_wet;
     if (rwet > 0.001f) {
         const float rdry  = 1.f - rwet;
         const float fb    = 0.7f + 0.28f * fx->rev_room;  // classic freeverb room curve
         const float damp  = fx->rev_damp * 0.4f;
         const float r_in_g = 0.6f;                        // input is hotter than freeverb expects
-        for (size_t i = 0; i < frames; i++) {
-            float in_l = buf[2 * i], in_r = buf[2 * i + 1];
+        for (size_t i = 0; i < frames; i += 2) {
+            float in_l = (buf[2 * i]     + buf[2 * i + 2]) * 0.5f;
+            float in_r = (buf[2 * i + 1] + buf[2 * i + 3]) * 0.5f;
             float rin = (in_l + in_r) * 0.5f * r_in_g;
 
             float acc[2] = {0.f, 0.f};
@@ -204,8 +218,10 @@ void fx_process(float *buf, size_t frames)
             if (!(out_l > -1e9f && out_l < 1e9f)) out_l = 0.f;
             if (!(out_r > -1e9f && out_r < 1e9f)) out_r = 0.f;
 
-            buf[2 * i]     = in_l * rdry + out_l * rwet;
-            buf[2 * i + 1] = in_r * rdry + out_r * rwet;
+            buf[2 * i]     = buf[2 * i]     * rdry + out_l * rwet;
+            buf[2 * i + 1] = buf[2 * i + 1] * rdry + out_r * rwet;
+            buf[2 * i + 2] = buf[2 * i + 2] * rdry + out_l * rwet;
+            buf[2 * i + 3] = buf[2 * i + 3] * rdry + out_r * rwet;
         }
     }
 

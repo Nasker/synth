@@ -15,27 +15,58 @@ static i2s_chan_handle_t s_tx_chan;
 static volatile uint32_t s_blocks_rendered;
 static volatile uint32_t s_max_cycles;
 
+// FX runs on core 0 in parallel with the next block's voice render:
+// audio (core 1) renders voices into fbuf[cur], hands it to the FX task,
+// then converts + writes fbuf[prev] which FX finished during our render.
+// Costs one block (~5.8ms) of latency; the render deadline only pays
+// for the voice engine.
+static float       s_fbuf[2][FRAMES_PER_CHUNK * 2];
+static TaskHandle_t s_audio_task;
+static TaskHandle_t s_fx_task;
+
+static void fx_task(void *arg)
+{
+    uint32_t idx;
+    while (1) {
+        xTaskNotifyWait(0, UINT32_MAX, &idx, portMAX_DELAY);
+        fx_process(s_fbuf[idx & 1], FRAMES_PER_CHUNK);
+        xTaskNotify(s_audio_task, 1, eIncrement);
+    }
+}
+
 static void audio_task(void *arg)
 {
-    static float fbuf[FRAMES_PER_CHUNK * 2];
+    s_audio_task = xTaskGetCurrentTaskHandle();
+    xTaskCreatePinnedToCore(fx_task, "fx", 3072, NULL, 22, &s_fx_task, 0);
+
     int16_t buf[FRAMES_PER_CHUNK * 2];
+    int cur = 0, have_prev = 0;
     while (1) {
         uint32_t t0 = esp_cpu_get_cycle_count();
-        synth_render(fbuf, FRAMES_PER_CHUNK);
-        fx_process(fbuf, FRAMES_PER_CHUNK);
-        for (int i = 0; i < FRAMES_PER_CHUNK * 2; i++) {
-            float x = fbuf[i];
-            if (x > -1e-6f && x < 1e-6f) x = 0.f;  // kill denormal float->int path
-            if (x > 1.f)  x = 1.f;
-            if (x < -1.f) x = -1.f;
-            buf[i] = (int16_t)(x * 32767.f);
+        synth_render(s_fbuf[cur], FRAMES_PER_CHUNK);
+
+        // FX must be idle (and prev done) before we hand it the next block
+        if (have_prev) ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        xTaskNotify(s_fx_task, cur, eSetValueWithOverwrite);
+
+        if (have_prev) {
+            const float *done = s_fbuf[cur ^ 1];
+            for (int i = 0; i < FRAMES_PER_CHUNK * 2; i++) {
+                float x = done[i];
+                if (x > -1e-6f && x < 1e-6f) x = 0.f;  // kill denormal float->int path
+                if (x > 1.f)  x = 1.f;
+                if (x < -1.f) x = -1.f;
+                buf[i] = (int16_t)(x * 32767.f);
+            }
+            size_t written = 0;
+            i2s_channel_write(s_tx_chan, buf, sizeof(buf), &written, portMAX_DELAY);
+            s_blocks_rendered++;
         }
+
         uint32_t spent = esp_cpu_get_cycle_count() - t0;
         if (spent > s_max_cycles) s_max_cycles = spent;
-
-        size_t written = 0;
-        i2s_channel_write(s_tx_chan, buf, sizeof(buf), &written, portMAX_DELAY);
-        s_blocks_rendered++;
+        cur ^= 1;
+        have_prev = 1;
     }
 }
 

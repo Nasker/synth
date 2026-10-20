@@ -40,6 +40,10 @@
 <div id="status" class="off">disconnected</div>
 
 <div class="panel">
+  <div class="waves" id="ptabs">
+    <button data-p="0" class="active">part 1 · ch 1</button>
+    <button data-p="1">part 2 · ch 2</button>
+  </div>
   <h2>oscillator 1</h2>
   <div class="waves" id="waves1">
     <button data-w="0">sine</button>
@@ -97,8 +101,6 @@
       <input id="p-release" type="range" min="0.005" max="3" step="0.005" value="0.25"></div>
     <div class="slider"><label>glide <span id="v-glide">0.000</span></label>
       <input id="p-glide" type="range" min="0" max="0.8" step="0.005" value="0"></div>
-    <div class="slider"><label>master <span id="v-master">0.60</span></label>
-      <input id="p-master" type="range" min="0" max="1" step="0.01" value="0.6"></div>
   </div>
 </div>
 
@@ -123,6 +125,8 @@
       <input id="p-comp_thresh" type="range" min="0.3" max="1" step="0.01" value="0.6"></div>
     <div class="slider"><label>comp ratio <span id="v-comp_ratio">3.0</span></label>
       <input id="p-comp_ratio" type="range" min="1" max="10" step="0.1" value="3"></div>
+    <div class="slider"><label>master <span id="v-master">0.60</span></label>
+      <input id="p-master" type="range" min="0" max="1" step="0.01" value="0.6"></div>
   </div>
 </div>
 
@@ -137,10 +141,17 @@
 <script>
 const statusEl = document.getElementById('status');
 let ws;
+let curPart = 0;
+const state = {p: null, fx: null};
 
 function connect() {
   ws = new WebSocket(`ws://${location.host}/ws`);
-  ws.onopen  = () => { statusEl.textContent = 'connected'; statusEl.className = 'on'; };
+  ws.onopen  = () => { statusEl.textContent = 'connected'; statusEl.className = 'on';
+                      send({type: 'get_state'}); };
+  ws.onmessage = e => {
+    const m = JSON.parse(e.data);
+    if (m.type === 'state') { state.p = m.p; state.fx = m.fx; applyState(); }
+  };
   ws.onclose = () => { statusEl.textContent = 'reconnecting…'; statusEl.className = 'off';
                       setTimeout(connect, 1500); };
 }
@@ -149,13 +160,51 @@ connect();
 function send(obj) {
   if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
 }
-const param = (name, value) => send({type: 'param', name, value});
+const param = (name, value) => send({type: 'param', name, value, part: curPart});
+
+const fmt = (name, v, step) =>
+  (name === 'attack' || name === 'decay' || name === 'release' || name === 'glide')
+    ? v.toFixed(3) : (step.includes('.') ? v.toFixed(2) : v);
+
+function setSlider(name, v) {
+  const el = document.getElementById('p-' + name);
+  const lb = document.getElementById('v-' + name);
+  if (!el || !lb) return;
+  el.value = v;
+  lb.textContent = fmt(name, v, el.step);
+}
+
+function setWave(group, w) {
+  document.querySelectorAll('#' + group + ' button').forEach(b =>
+    b.classList.toggle('active', +b.dataset.w === w));
+}
+
+function applyState() {
+  if (!state.p) return;
+  const p = state.p[curPart];
+  for (const k in p) {
+    if (k === 'wave1') setWave('waves1', p[k]);
+    else if (k === 'wave2') setWave('waves2', p[k]);
+    else setSlider(k, p[k]);
+  }
+  if (state.fx) for (const k in state.fx) setSlider(k, state.fx[k]);
+}
+
+document.querySelectorAll('#ptabs button').forEach(b => {
+  b.addEventListener('click', () => {
+    document.querySelectorAll('#ptabs button').forEach(x => x.classList.remove('active'));
+    b.classList.add('active');
+    curPart = +b.dataset.p;
+    applyState();
+  });
+});
 
 for (const [group, pname] of [['waves1', 'wave1'], ['waves2', 'wave2']]) {
   document.querySelectorAll('#' + group + ' button').forEach(b => {
     b.addEventListener('click', () => {
       document.querySelectorAll('#' + group + ' button').forEach(x => x.classList.remove('active'));
       b.classList.add('active');
+      if (state.p) state.p[curPart][pname] = +b.dataset.w;
       param(pname, +b.dataset.w);
     });
   });
@@ -164,12 +213,11 @@ for (const [group, pname] of [['waves1', 'wave1'], ['waves2', 'wave2']]) {
 // every slider with id p-<name> sends param <name> and updates label v-<name>
 document.querySelectorAll('input[id^="p-"]').forEach(el => {
   const name = el.id.slice(2);
-  const lb = document.getElementById('v-' + name);
   el.addEventListener('input', () => {
     const v = parseFloat(el.value);
-    lb.textContent = el.step.includes('.') ? v.toFixed(2) : v;
-    if (name === 'attack' || name === 'decay' || name === 'release' || name === 'glide')
-      lb.textContent = v.toFixed(3);
+    document.getElementById('v-' + name).textContent = fmt(name, v, el.step);
+    if (state.p && name in state.p[curPart]) state.p[curPart][name] = v;
+    if (state.fx && name in state.fx) state.fx[name] = v;
     param(name, v);
   });
 });
@@ -217,8 +265,8 @@ document.getElementById('octdown').addEventListener('click', () => {
 
 function press(k, on) {
   const n = +k.dataset.note;
-  if (on && !held.has(n)) { held.add(n); k.classList.add('down'); send({type:'note_on', note:n, vel:0.8}); }
-  if (!on && held.has(n)) { held.delete(n); k.classList.remove('down'); send({type:'note_off', note:n}); }
+  if (on && !held.has(n)) { held.add(n); k.classList.add('down'); send({type:'note_on', note:n, vel:0.8, part:curPart}); }
+  if (!on && held.has(n)) { held.delete(n); k.classList.remove('down'); send({type:'note_off', note:n, part:curPart}); }
 }
 keysEl.addEventListener('pointerdown', e => { if (e.target.dataset.note) press(e.target, true); });
 keysEl.addEventListener('pointerup',   e => { if (e.target.dataset.note) press(e.target, false); });

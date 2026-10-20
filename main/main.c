@@ -53,24 +53,23 @@ void app_main(void)
     const int n_arp = sizeof(arp) / sizeof(arp[0]);
     const int n_chord = sizeof(chord) / sizeof(chord[0]);
 
-    // Demo plays until a MIDI device or the web UI sends its first note
+    // Demo plays until a MIDI device or the web UI sends its first note.
+    // Part 1 pads a held chord underneath while part 0 cycles waveforms.
     int wave = SYNTH_WAVE_SAW;
     while (!usb_midi_seen_activity() && !web_user_played()) {
-        synth_params()->wave1 = wave;
-        synth_params()->wave2 = wave;
+        synth_patch(0)->wave1 = wave;
+        synth_patch(0)->wave2 = wave;
         ESP_LOGI(TAG, "waveform: %s", wave_names[wave]);
 
+        for (int i = 0; i < n_chord; i++) synth_note_on(chord[i], 0.4f, 1);
         for (int i = 0; i < n_arp; i++) {
-            synth_note_on(arp[i], 0.9f);
+            synth_note_on(arp[i], 0.9f, 0);
             vTaskDelay(pdMS_TO_TICKS(250));
-            synth_note_off(arp[i]);
+            synth_note_off(arp[i], 0);
             vTaskDelay(pdMS_TO_TICKS(60));
         }
-
-        for (int i = 0; i < n_chord; i++) synth_note_on(chord[i], 0.5f);
-        vTaskDelay(pdMS_TO_TICKS(1200));
-        for (int i = 0; i < n_chord; i++) synth_note_off(chord[i]);
-        vTaskDelay(pdMS_TO_TICKS(700));
+        for (int i = 0; i < n_chord; i++) synth_note_off(chord[i], 1);
+        vTaskDelay(pdMS_TO_TICKS(900));
 
         wave = (wave + 1) % SYNTH_WAVE_COUNT;
     }

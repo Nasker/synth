@@ -13,6 +13,7 @@ enum { ENV_IDLE, ENV_ATTACK, ENV_DECAY, ENV_SUSTAIN, ENV_RELEASE };
 typedef struct {
     int      env_stage;
     int      note;
+    int      part;
     uint32_t age;
     float    env;
     float    velocity;
@@ -28,29 +29,66 @@ typedef struct {
     uint32_t rng;                 // noise generator state
 } voice_t;
 
+// Per-block snapshot of each part's patch — volatile patch fields are
+// read once per render block instead of once per sample
+typedef struct {
+    int   wave1, wave2;
+    float mix1, mix2;
+    float pwm;
+    float gk;                     // glide coefficient
+    float arate, drate, rrate;
+    float sustain;
+    float lfo_phase;
+    bool  dual;
+} part_rt_t;
+
 static int16_t       s_sine_lut[LUT_SIZE];
 static int           s_sample_rate;
 static voice_t       s_voices[SYNTH_NUM_VOICES];
 static uint32_t      s_age_counter;
-static volatile float s_bend = 1.f;
-static float          s_lfo_phase;
+static volatile float s_bend[SYNTH_NUM_PARTS] = {1.f, 1.f};
+static part_rt_t      s_rt[SYNTH_NUM_PARTS];
 
-static synth_params_t s_params = {
-    .wave1      = SYNTH_WAVE_SAW,
-    .wave2      = SYNTH_WAVE_SAW,
-    .osc_mix    = 0.35f,
-    .pwm        = 0.35f,
-    .detune     = 0.25f,
-    .spread     = 0.7f,
-    .cutoff     = 0.7f,
-    .reso       = 0.2f,
-    .lfo_rate   = 0.4f,
-    .lfo_depth  = 0.0f,
-    .attack_s   = 0.01f,
-    .decay_s    = 0.15f,
-    .sustain    = 0.7f,
-    .release_s  = 0.25f,
-    .glide_s    = 0.0f,
+static synth_patch_t s_patches[SYNTH_NUM_PARTS] = {
+    {   // part 0 — MIDI ch 1: lead voice
+        .wave1     = SYNTH_WAVE_SAW,
+        .wave2     = SYNTH_WAVE_SAW,
+        .osc_mix   = 0.35f,
+        .pwm       = 0.35f,
+        .detune    = 0.25f,
+        .spread    = 0.7f,
+        .cutoff    = 0.7f,
+        .reso      = 0.2f,
+        .lfo_rate  = 0.4f,
+        .lfo_depth = 0.0f,
+        .attack_s  = 0.01f,
+        .decay_s   = 0.15f,
+        .sustain   = 0.7f,
+        .release_s = 0.25f,
+        .glide_s   = 0.0f,
+        .midi_ch   = 0,
+    },
+    {   // part 1 — MIDI ch 2: softer pad voice
+        .wave1     = SYNTH_WAVE_PWM,
+        .wave2     = SYNTH_WAVE_SAW,
+        .osc_mix   = 0.45f,
+        .pwm       = 0.3f,
+        .detune    = 0.4f,
+        .spread    = 0.85f,
+        .cutoff    = 0.5f,
+        .reso      = 0.15f,
+        .lfo_rate  = 0.25f,
+        .lfo_depth = 0.15f,
+        .attack_s  = 0.35f,
+        .decay_s   = 0.4f,
+        .sustain   = 0.8f,
+        .release_s = 0.7f,
+        .glide_s   = 0.0f,
+        .midi_ch   = 1,
+    },
+};
+
+static synth_fx_t s_fx = {
     .delay_ms   = 380.f,
     .delay_fb   = 0.35f,
     .delay_mix  = 0.18f,
@@ -75,9 +113,24 @@ void synth_init(int sample_rate)
     }
 }
 
-synth_params_t *synth_params(void)
+synth_patch_t *synth_patch(int part)
 {
-    return &s_params;
+    if (part < 0) part = 0;
+    if (part >= SYNTH_NUM_PARTS) part = SYNTH_NUM_PARTS - 1;
+    return &s_patches[part];
+}
+
+synth_fx_t *synth_fx_params(void)
+{
+    return &s_fx;
+}
+
+int synth_part_for_channel(int midi_ch)
+{
+    for (int i = 0; i < SYNTH_NUM_PARTS; i++) {
+        if (s_patches[i].midi_ch == midi_ch) return i;
+    }
+    return 0;   // unmatched channels fall back to part 0
 }
 
 float synth_midi_to_freq(int note)
@@ -85,9 +138,10 @@ float synth_midi_to_freq(int note)
     return 440.f * powf(2.f, (note - 69) / 12.f);
 }
 
-void synth_pitch_bend(float semitones)
+void synth_pitch_bend(float semitones, int part)
 {
-    s_bend = powf(2.f, semitones / 12.f);
+    if (part < 0 || part >= SYNTH_NUM_PARTS) return;
+    s_bend[part] = powf(2.f, semitones / 12.f);
 }
 
 static inline float poly_blep(float t, float dt)
@@ -115,7 +169,8 @@ static inline float pulse_wave(float t, float dt, float w)
     return s;
 }
 
-static inline float osc_sample(voice_t *v, uint32_t phase, uint32_t inc, int wave)
+static inline float osc_sample(voice_t *v, uint32_t phase, uint32_t inc,
+                               int wave, float pwm_w)
 {
     const float t  = phase * PHASE_SCALE;
     const float dt = inc * PHASE_SCALE;
@@ -126,7 +181,7 @@ static inline float osc_sample(voice_t *v, uint32_t phase, uint32_t inc, int wav
     case SYNTH_WAVE_SQUARE:
         return pulse_wave(t, dt, 0.5f);
     case SYNTH_WAVE_PWM: {
-        float w = s_params.pwm;
+        float w = pwm_w;
         if (w < 0.05f) w = 0.05f;
         if (w > 0.95f) w = 0.95f;
         return pulse_wave(t, dt, w);
@@ -144,24 +199,22 @@ static inline float osc_sample(voice_t *v, uint32_t phase, uint32_t inc, int wav
     }
 }
 
-// envelope rates for ADR stages are global — computed once per block
-static float s_arate, s_drate, s_rrate;
-
 static inline void env_step(voice_t *v)
 {
+    const part_rt_t *rt = &s_rt[v->part];
     switch (v->env_stage) {
     case ENV_ATTACK:
-        v->env += s_arate;
+        v->env += rt->arate;
         if (v->env >= 1.f) { v->env = 1.f; v->env_stage = ENV_DECAY; }
         break;
     case ENV_DECAY:
-        v->env -= s_drate;
-        if (v->env <= s_params.sustain) { v->env = s_params.sustain; v->env_stage = ENV_SUSTAIN; }
+        v->env -= rt->drate;
+        if (v->env <= rt->sustain) { v->env = rt->sustain; v->env_stage = ENV_SUSTAIN; }
         break;
     case ENV_SUSTAIN:
         break;
     case ENV_RELEASE:
-        v->env -= s_rrate;
+        v->env -= rt->rrate;
         if (v->env <= 0.f) { v->env = 0.f; v->env_stage = ENV_IDLE; }
         break;
     default:
@@ -169,12 +222,16 @@ static inline void env_step(voice_t *v)
     }
 }
 
-void synth_note_on(int midi_note, float velocity)
+void synth_note_on(int midi_note, float velocity, int part)
 {
+    if (part < 0 || part >= SYNTH_NUM_PARTS) return;
+    const synth_patch_t *pp = &s_patches[part];
+
     int slot = -1;
     uint32_t oldest = UINT32_MAX;
     for (int i = 0; i < SYNTH_NUM_VOICES; i++) {
-        if (s_voices[i].note == midi_note && s_voices[i].env_stage != ENV_IDLE) {
+        if (s_voices[i].note == midi_note && s_voices[i].part == part &&
+            s_voices[i].env_stage != ENV_IDLE) {
             slot = i;
             break;
         }
@@ -190,13 +247,14 @@ void synth_note_on(int midi_note, float velocity)
     voice_t *v = &s_voices[slot];
     float f = synth_midi_to_freq(midi_note);
     float inc  = f * 4294967296.0 / s_sample_rate;
-    float det  = powf(2.f, s_params.detune * 50.f / 1200.f); // 0..50 cents on osc2
+    float det  = powf(2.f, pp->detune * 50.f / 1200.f); // 0..50 cents on osc2
 
     v->note     = midi_note;
+    v->part     = part;
     v->velocity = velocity;
     v->inc_t    = inc;
     v->inc2_t   = inc * det;
-    if (s_params.glide_s > 0.0005f && v->inc != 0.f) {
+    if (pp->glide_s > 0.0005f && v->inc != 0.f) {
         // keep current inc -> glides toward target
     } else {
         v->inc = inc; v->inc2 = inc * det;
@@ -207,10 +265,10 @@ void synth_note_on(int midi_note, float velocity)
     v->age       = s_age_counter++;
 }
 
-void synth_note_off(int midi_note)
+void synth_note_off(int midi_note, int part)
 {
     for (int i = 0; i < SYNTH_NUM_VOICES; i++) {
-        if (s_voices[i].note == midi_note &&
+        if (s_voices[i].note == midi_note && s_voices[i].part == part &&
             s_voices[i].env_stage != ENV_IDLE &&
             s_voices[i].env_stage != ENV_RELEASE) {
             s_voices[i].env_stage = ENV_RELEASE;
@@ -226,17 +284,18 @@ static inline float soft_clip(float x)
 // update per-block coefficients for one voice (TPT SVF, pan)
 static void update_voice_coeffs(voice_t *v)
 {
-    float lf = sinf(TWO_PI * (s_lfo_phase + v->lfo_off));
+    const synth_patch_t *pp = &s_patches[v->part];
+    float lf = sinf(TWO_PI * (s_rt[v->part].lfo_phase + v->lfo_off));
 
-    float fc = 40.f * powf(500.f, s_params.cutoff);        // 40Hz..20kHz
-    fc *= powf(2.f, lf * s_params.lfo_depth * 2.f);        // LFO ±2 oct
+    float fc = 40.f * powf(500.f, pp->cutoff);             // 40Hz..20kHz
+    fc *= powf(2.f, lf * pp->lfo_depth * 2.f);             // LFO ±2 oct
     fc *= 0.6f + 0.8f * v->velocity;                       // velocity opens filter
     if (fc < 30.f)     fc = 30.f;
     if (fc > 16000.f)  fc = 16000.f;
 
     // Zavalishin TPT coefficients — unconditionally stable below Nyquist
     float g = tanf((float)M_PI * fc / s_sample_rate);
-    float k = 2.f - 1.9f * s_params.reso;                  // 1/Q: res1 -> ~0.1
+    float k = 2.f - 1.9f * pp->reso;                       // 1/Q: res1 -> ~0.1
     if (g > 10.f) g = 10.f;
     float kk = g + k;
     v->svf_a1 = 1.f / (1.f + g * kk);
@@ -244,7 +303,7 @@ static void update_voice_coeffs(voice_t *v)
     v->svf_a3 = g * v->svf_a2;
 
     float pan = ((float)(v - s_voices) / (SYNTH_NUM_VOICES - 1)) * 2.f - 1.f;
-    pan *= s_params.spread;
+    pan *= pp->spread;
     float a = (pan + 1.f) * (float)M_PI_4;                 // equal-power
     v->pan_l = cosf(a);
     v->pan_r = sinf(a);
@@ -261,26 +320,33 @@ int synth_active_voices(void)
 
 void synth_render(float *stereo_buf, size_t frames)
 {
-    const int   wave1  = s_params.wave1;
-    const int   wave2  = s_params.wave2;
-    const float master = s_params.master;
-    const float mix1   = 1.f - s_params.osc_mix;
-    const float mix2   = s_params.osc_mix;
-    const bool  dual   = mix2 > 0.001f;
-    const float gk     = s_params.glide_s > 0.0005f
-                         ? 1.f / (s_params.glide_s * s_sample_rate + 1.f) : 1.f;
-    // envelope rates once per block — not per-sample divisions
-    const float sr_f = (float)s_sample_rate;
-    s_arate = 1.f / (s_params.attack_s  * sr_f + 1.f);
-    s_drate = 1.f / (s_params.decay_s   * sr_f + 1.f);
-    s_rrate = 1.f / (s_params.release_s * sr_f + 1.f);
+    const float master = s_fx.master;
+    const float sr_f   = (float)s_sample_rate;
+
+    // snapshot each part's volatile patch fields once per block
+    for (int p = 0; p < SYNTH_NUM_PARTS; p++) {
+        const synth_patch_t *pp = &s_patches[p];
+        part_rt_t *rt = &s_rt[p];
+        rt->wave1  = pp->wave1;
+        rt->wave2  = pp->wave2;
+        rt->mix1   = 1.f - pp->osc_mix;
+        rt->mix2   = pp->osc_mix;
+        rt->pwm    = pp->pwm;
+        rt->dual   = rt->mix2 > 0.001f;
+        rt->gk     = pp->glide_s > 0.0005f
+                     ? 1.f / (pp->glide_s * sr_f + 1.f) : 1.f;
+        rt->arate   = 1.f / (pp->attack_s  * sr_f + 1.f);
+        rt->drate   = 1.f / (pp->decay_s   * sr_f + 1.f);
+        rt->rrate   = 1.f / (pp->release_s * sr_f + 1.f);
+        rt->sustain = pp->sustain;
+        rt->lfo_phase += pp->lfo_rate * frames / sr_f;
+        if (rt->lfo_phase >= 1.f) rt->lfo_phase -= 1.f;
+    }
 
     int active = 0;
     for (int v = 0; v < SYNTH_NUM_VOICES; v++) {
         if (s_voices[v].env_stage != ENV_IDLE) { active++; update_voice_coeffs(&s_voices[v]); }
     }
-    s_lfo_phase += s_params.lfo_rate * frames / s_sample_rate;
-    if (s_lfo_phase >= 1.f) s_lfo_phase -= 1.f;
 
     const float norm = active > 0 ? 1.f / sqrtf((float)active) : 1.f;
 
@@ -290,8 +356,16 @@ void synth_render(float *stereo_buf, size_t frames)
             voice_t *vc = &s_voices[v];
             if (vc->env_stage == ENV_IDLE) continue;
 
-            float o = osc_sample(vc, vc->phase, (uint32_t)vc->inc, wave1) * mix1;
-            if (dual) o += osc_sample(vc, vc->phase2, (uint32_t)vc->inc2, wave2) * mix2;
+            const part_rt_t *rt    = &s_rt[vc->part];
+            const float      bend  = s_bend[vc->part];
+            const float      pwm_w = rt->pwm;
+
+            float o = osc_sample(vc, vc->phase, (uint32_t)vc->inc,
+                                 rt->wave1, pwm_w) * rt->mix1;
+            if (rt->dual) {
+                o += osc_sample(vc, vc->phase2, (uint32_t)vc->inc2,
+                                rt->wave2, pwm_w) * rt->mix2;
+            }
 
             // TPT SVF -> lowpass out
             float v3  = o - vc->svf_ic2;
@@ -312,16 +386,16 @@ void synth_render(float *stereo_buf, size_t frames)
             ml += s * vc->pan_l;
             mr += s * vc->pan_r;
 
-            if (s_bend != 1.f) {
-                vc->phase  += (uint32_t)(vc->inc  * s_bend);
-                vc->phase2 += (uint32_t)(vc->inc2 * s_bend);
+            if (bend != 1.f) {
+                vc->phase  += (uint32_t)(vc->inc  * bend);
+                vc->phase2 += (uint32_t)(vc->inc2 * bend);
             } else {
                 vc->phase  += (uint32_t)vc->inc;
                 vc->phase2 += (uint32_t)vc->inc2;
             }
-            if (gk < 1.f) {
-                vc->inc  += (vc->inc_t  - vc->inc)  * gk;
-                vc->inc2 += (vc->inc2_t - vc->inc2) * gk;
+            if (rt->gk < 1.f) {
+                vc->inc  += (vc->inc_t  - vc->inc)  * rt->gk;
+                vc->inc2 += (vc->inc2_t - vc->inc2) * rt->gk;
             } else {
                 vc->inc = vc->inc_t;
                 vc->inc2 = vc->inc2_t;

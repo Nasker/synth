@@ -25,9 +25,11 @@ bool web_user_played(void)
     return s_user_played;
 }
 
-static void apply_param(const char *name, double value)
+static void apply_param(const char *name, double value, int part)
 {
-    synth_params_t *p = synth_params();
+    // patch params route to the addressed part; fx params are global
+    synth_patch_t *p = synth_patch(part);
+    synth_fx_t    *f = synth_fx_params();
     if      (!strcmp(name, "wave1"))     p->wave1      = (int)value;
     else if (!strcmp(name, "wave2"))     p->wave2      = (int)value;
     else if (!strcmp(name, "osc_mix"))   p->osc_mix    = value;
@@ -43,16 +45,64 @@ static void apply_param(const char *name, double value)
     else if (!strcmp(name, "sustain"))   p->sustain    = value;
     else if (!strcmp(name, "release"))   p->release_s  = value;
     else if (!strcmp(name, "glide"))     p->glide_s    = value;
-    else if (!strcmp(name, "delay_ms"))  p->delay_ms   = value;
-    else if (!strcmp(name, "delay_fb"))  p->delay_fb   = value;
-    else if (!strcmp(name, "delay_mix")) p->delay_mix  = value;
-    else if (!strcmp(name, "delay_damp"))p->delay_damp = value;
-    else if (!strcmp(name, "comp_thresh"))p->comp_thresh = value;
-    else if (!strcmp(name, "comp_ratio")) p->comp_ratio  = value;
-    else if (!strcmp(name, "master"))    p->master     = value;
+    else if (!strcmp(name, "delay_ms"))  f->delay_ms   = value;
+    else if (!strcmp(name, "delay_fb"))  f->delay_fb   = value;
+    else if (!strcmp(name, "delay_mix")) f->delay_mix  = value;
+    else if (!strcmp(name, "delay_damp"))f->delay_damp = value;
+    else if (!strcmp(name, "comp_thresh"))f->comp_thresh = value;
+    else if (!strcmp(name, "comp_ratio")) f->comp_ratio  = value;
+    else if (!strcmp(name, "master"))    f->master     = value;
 }
 
-static void handle_ws_msg(const char *msg)
+// full state push: parts + fx, so the UI can populate both part tabs
+static esp_err_t send_full_state(httpd_req_t *req)
+{
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddStringToObject(root, "type", "state");
+    cJSON *parts = cJSON_AddArrayToObject(root, "p");
+    for (int i = 0; i < SYNTH_NUM_PARTS; i++) {
+        const synth_patch_t *pp = synth_patch(i);
+        cJSON *o = cJSON_CreateObject();
+        cJSON_AddNumberToObject(o, "wave1",     pp->wave1);
+        cJSON_AddNumberToObject(o, "wave2",     pp->wave2);
+        cJSON_AddNumberToObject(o, "osc_mix",   pp->osc_mix);
+        cJSON_AddNumberToObject(o, "pwm",       pp->pwm);
+        cJSON_AddNumberToObject(o, "detune",    pp->detune);
+        cJSON_AddNumberToObject(o, "spread",    pp->spread);
+        cJSON_AddNumberToObject(o, "cutoff",    pp->cutoff);
+        cJSON_AddNumberToObject(o, "reso",      pp->reso);
+        cJSON_AddNumberToObject(o, "lfo_rate",  pp->lfo_rate);
+        cJSON_AddNumberToObject(o, "lfo_depth", pp->lfo_depth);
+        cJSON_AddNumberToObject(o, "attack",    pp->attack_s);
+        cJSON_AddNumberToObject(o, "decay",     pp->decay_s);
+        cJSON_AddNumberToObject(o, "sustain",   pp->sustain);
+        cJSON_AddNumberToObject(o, "release",   pp->release_s);
+        cJSON_AddNumberToObject(o, "glide",     pp->glide_s);
+        cJSON_AddItemToArray(parts, o);
+    }
+    const synth_fx_t *fx = synth_fx_params();
+    cJSON *f = cJSON_AddObjectToObject(root, "fx");
+    cJSON_AddNumberToObject(f, "delay_ms",    fx->delay_ms);
+    cJSON_AddNumberToObject(f, "delay_fb",    fx->delay_fb);
+    cJSON_AddNumberToObject(f, "delay_mix",   fx->delay_mix);
+    cJSON_AddNumberToObject(f, "delay_damp",  fx->delay_damp);
+    cJSON_AddNumberToObject(f, "comp_thresh", fx->comp_thresh);
+    cJSON_AddNumberToObject(f, "comp_ratio",  fx->comp_ratio);
+    cJSON_AddNumberToObject(f, "master",      fx->master);
+
+    char *txt = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    if (!txt) return ESP_ERR_NO_MEM;
+    httpd_ws_frame_t out = {
+        .final = true, .fragmented = false, .type = HTTPD_WS_TYPE_TEXT,
+        .payload = (uint8_t *)txt, .len = strlen(txt),
+    };
+    esp_err_t ret = httpd_ws_send_frame_async(req->handle, httpd_req_to_sockfd(req), &out);
+    free(txt);
+    return ret;
+}
+
+static void handle_ws_msg(httpd_req_t *req, const char *msg)
 {
     cJSON *j = cJSON_Parse(msg);
     if (!j) return;
@@ -60,22 +110,27 @@ static void handle_ws_msg(const char *msg)
     const cJSON *type = cJSON_GetObjectItemCaseSensitive(j, "type");
     if (!cJSON_IsString(type)) { cJSON_Delete(j); return; }
 
+    const cJSON *pj = cJSON_GetObjectItem(j, "part");
+    int part = cJSON_IsNumber(pj) ? pj->valueint : 0;
+
     if (!strcmp(type->valuestring, "note_on")) {
         const cJSON *note = cJSON_GetObjectItem(j, "note");
         const cJSON *vel  = cJSON_GetObjectItem(j, "vel");
         if (cJSON_IsNumber(note)) {
             s_user_played = true;
-            synth_note_on(note->valueint, cJSON_IsNumber(vel) ? vel->valuedouble : 0.8);
+            synth_note_on(note->valueint, cJSON_IsNumber(vel) ? vel->valuedouble : 0.8, part);
         }
     } else if (!strcmp(type->valuestring, "note_off")) {
         const cJSON *note = cJSON_GetObjectItem(j, "note");
-        if (cJSON_IsNumber(note)) synth_note_off(note->valueint);
+        if (cJSON_IsNumber(note)) synth_note_off(note->valueint, part);
     } else if (!strcmp(type->valuestring, "param")) {
         const cJSON *name = cJSON_GetObjectItem(j, "name");
         const cJSON *val  = cJSON_GetObjectItem(j, "value");
         if (cJSON_IsString(name) && cJSON_IsNumber(val)) {
-            apply_param(name->valuestring, val->valuedouble);
+            apply_param(name->valuestring, val->valuedouble, part);
         }
+    } else if (!strcmp(type->valuestring, "get_state")) {
+        send_full_state(req);
     }
     cJSON_Delete(j);
 }
@@ -103,7 +158,7 @@ static esp_err_t ws_get(httpd_req_t *req)
     if (!buf) return ESP_ERR_NO_MEM;
     pkt.payload = buf;
     ret = httpd_ws_recv_frame(req, &pkt, pkt.len);
-    if (ret == ESP_OK) handle_ws_msg((char *)buf);
+    if (ret == ESP_OK) handle_ws_msg(req, (char *)buf);
     free(buf);
     return ret;
 }

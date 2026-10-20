@@ -2,11 +2,11 @@
 
 ## Phase A — richer voice engine (still one timbre)
 
-- [ ] Independent wave select per oscillator (MiniMoog style): osc1 & osc2
+- [x] Independent wave select per oscillator (MiniMoog style): osc1 & osc2
       each choose sine / saw / square / tri / PWM / noise
-- [ ] PWM: PolyBLEP pulse with width param (5–50%)
-- [ ] Noise: xorshift32 white source per voice + osc-mix knob
-- [ ] Osc mixer: osc1/osc2 blend param (replaces fixed 0.7 sum)
+- [x] PWM: PolyBLEP pulse with width param (5–95%)
+- [x] Noise: xorshift32 white source per voice + osc-mix knob
+- [x] Osc mixer: osc1/osc2 blend param (replaces fixed 0.7 sum)
 - [ ] Vibrato: route the global LFO to pitch as well as cutoff
       (lfo_dest: cutoff / pitch / both)
 - [ ] Filter key-tracking: cutoff follows note pitch (param, 0..1)
@@ -15,11 +15,11 @@
 
 ## Phase B — 2-part multitimbral
 
-- [ ] synth_params -> parts[2]; voice gets part_idx
-- [ ] MIDI channel -> part routing (ch already parsed, currently dropped)
-- [ ] Shared voice pool, global LRU stealing across parts
-- [ ] Web UI: part tabs (P1/P2) — params scoped per part
-- [ ] Shared bus FX + master stays global
+- [x] synth_params -> patches[2] + fx; voice gets part_idx
+- [x] MIDI channel -> part routing (ch1 -> part0, ch2 -> part1, else part0)
+- [x] Shared voice pool, global LRU stealing across parts
+- [x] Web UI: part tabs (P1/P2) — params scoped per part, state push
+- [x] Shared bus FX + master stays global (per-channel CCs route per part)
 
 ## Phase C — FX chain (order: chorus -> delay -> reverb -> comp)
 

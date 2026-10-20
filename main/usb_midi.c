@@ -29,29 +29,31 @@ static struct {
 
 static void parse_midi_packet(const uint8_t *p)
 {
-    uint8_t cin = p[0] & 0x0F;
-    uint8_t d1  = p[2];
-    uint8_t d2  = p[3];
+    uint8_t cin  = p[0] & 0x0F;
+    uint8_t ch   = p[1] & 0x0F;
+    uint8_t d1   = p[2];
+    uint8_t d2   = p[3];
+    int     part = synth_part_for_channel(ch);
 
     switch (cin) {
     case CIN_NOTE_ON:
-        if (d2 > 0) synth_note_on(d1, d2 / 127.f);
-        else        synth_note_off(d1);
+        if (d2 > 0) synth_note_on(d1, d2 / 127.f, part);
+        else        synth_note_off(d1, part);
         break;
     case CIN_NOTE_OFF:
-        synth_note_off(d1);
+        synth_note_off(d1, part);
         break;
     case CIN_CONTROL: {
         float v = d2 / 127.f;
-        if      (d1 == 1)  synth_params()->lfo_depth = v;   // mod wheel -> filter LFO
-        else if (d1 == 7)  synth_params()->master    = v;   // channel volume
-        else if (d1 == 71) synth_params()->reso      = v;   // "sound controller 2"
-        else if (d1 == 74) synth_params()->cutoff    = v;   // brightness
+        if      (d1 == 1)  synth_patch(part)->lfo_depth  = v;   // mod wheel -> filter LFO
+        else if (d1 == 7)  synth_fx_params()->master     = v;   // channel volume
+        else if (d1 == 71) synth_patch(part)->reso       = v;   // "sound controller 2"
+        else if (d1 == 74) synth_patch(part)->cutoff     = v;   // brightness
         break;
     }
     case CIN_PITCH_BEND: {
         int bend = (d2 << 7) | d1;   // 14-bit, 8192 = center
-        synth_pitch_bend((bend - 8192) / 8192.f * PITCH_BEND_RANGE);
+        synth_pitch_bend((bend - 8192) / 8192.f * PITCH_BEND_RANGE, part);
         break;
     }
     default:

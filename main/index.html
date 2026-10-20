@@ -40,16 +40,31 @@
 <div id="status" class="off">disconnected</div>
 
 <div class="panel">
-  <h2>oscillator</h2>
-  <div class="waves">
+  <h2>oscillator 1</h2>
+  <div class="waves" id="waves1">
     <button data-w="0">sine</button>
     <button data-w="1" class="active">saw</button>
-    <button data-w="2">square</button>
+    <button data-w="2">sqr</button>
     <button data-w="3">tri</button>
+    <button data-w="4">pwm</button>
+    <button data-w="5">noise</button>
+  </div>
+  <h2>oscillator 2</h2>
+  <div class="waves" id="waves2">
+    <button data-w="0">sine</button>
+    <button data-w="1" class="active">saw</button>
+    <button data-w="2">sqr</button>
+    <button data-w="3">tri</button>
+    <button data-w="4">pwm</button>
+    <button data-w="5">noise</button>
   </div>
   <div class="grid">
+    <div class="slider"><label>osc mix <span id="v-osc_mix">0.35</span></label>
+      <input id="p-osc_mix" type="range" min="0" max="1" step="0.01" value="0.35"></div>
     <div class="slider"><label>detune <span id="v-detune">0.25</span></label>
       <input id="p-detune" type="range" min="0" max="1" step="0.01" value="0.25"></div>
+    <div class="slider"><label>pwm width <span id="v-pwm">0.35</span></label>
+      <input id="p-pwm" type="range" min="0.05" max="0.95" step="0.01" value="0.35"></div>
     <div class="slider"><label>spread <span id="v-spread">0.70</span></label>
       <input id="p-spread" type="range" min="0" max="1" step="0.01" value="0.7"></div>
   </div>
@@ -136,13 +151,15 @@ function send(obj) {
 }
 const param = (name, value) => send({type: 'param', name, value});
 
-document.querySelectorAll('.waves button').forEach(b => {
-  b.addEventListener('click', () => {
-    document.querySelectorAll('.waves button').forEach(x => x.classList.remove('active'));
-    b.classList.add('active');
-    param('wave', +b.dataset.w);
+for (const [group, pname] of [['waves1', 'wave1'], ['waves2', 'wave2']]) {
+  document.querySelectorAll('#' + group + ' button').forEach(b => {
+    b.addEventListener('click', () => {
+      document.querySelectorAll('#' + group + ' button').forEach(x => x.classList.remove('active'));
+      b.classList.add('active');
+      param(pname, +b.dataset.w);
+    });
   });
-});
+}
 
 // every slider with id p-<name> sends param <name> and updates label v-<name>
 document.querySelectorAll('input[id^="p-"]').forEach(el => {

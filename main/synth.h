@@ -10,14 +10,19 @@ typedef enum {
     SYNTH_WAVE_SAW,
     SYNTH_WAVE_SQUARE,
     SYNTH_WAVE_TRI,
+    SYNTH_WAVE_PWM,
+    SYNTH_WAVE_NOISE,
     SYNTH_WAVE_COUNT
 } synth_wave_t;
 
 // Live-tweakable parameters — safe to poke from another task (web UI, MIDI)
 typedef struct {
     // oscillator
-    volatile int   waveform;       // synth_wave_t
+    volatile int   wave1;          // synth_wave_t, osc1
+    volatile int   wave2;          // synth_wave_t, osc2
+    volatile float osc_mix;        // 0..1: 0=osc1 only, 0.5=equal, 1=osc2 only
     volatile float detune;         // 0..1 -> 0..50 cents on osc2
+    volatile float pwm;            // 0.05..0.95 duty cycle for SYNTH_WAVE_PWM
     volatile float spread;         // 0..1 stereo voice spread
     // filter (per-voice SVF)
     volatile float cutoff;         // 0..1 -> ~40Hz..20kHz (exp)

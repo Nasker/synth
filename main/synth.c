@@ -25,6 +25,7 @@ typedef struct {
     float    svf_a1, svf_a2, svf_a3;
     float    pan_l, pan_r;
     float    lfo_off;             // per-voice LFO phase offset
+    uint32_t rng;                 // noise generator state
 } voice_t;
 
 static int16_t       s_sine_lut[LUT_SIZE];
@@ -35,7 +36,10 @@ static volatile float s_bend = 1.f;
 static float          s_lfo_phase;
 
 static synth_params_t s_params = {
-    .waveform   = SYNTH_WAVE_SAW,
+    .wave1      = SYNTH_WAVE_SAW,
+    .wave2      = SYNTH_WAVE_SAW,
+    .osc_mix    = 0.35f,
+    .pwm        = 0.35f,
     .detune     = 0.25f,
     .spread     = 0.7f,
     .cutoff     = 0.7f,
@@ -67,6 +71,7 @@ void synth_init(int sample_rate)
         // distribute filter-LFO phase + stereo position across voices
         s_voices[v].lfo_off = (float)v / SYNTH_NUM_VOICES;
         s_voices[v].pan_l   = s_voices[v].pan_r = 0.7071f;
+        s_voices[v].rng     = 0x9E3779B9u + v * 2654435761u;
     }
 }
 
@@ -100,7 +105,17 @@ static inline float poly_blep(float t, float dt)
 
 #define PHASE_SCALE (1.f / 4294967296.f)   // exact: divisor is a power of two
 
-static inline float osc_sample(uint32_t phase, uint32_t inc, int wave)
+static inline float pulse_wave(float t, float dt, float w)
+{
+    float s = t < w ? 1.f : -1.f;
+    s += poly_blep(t, dt);
+    float t2 = t - w;
+    if (t2 < 0.f) t2 += 1.f;
+    s -= poly_blep(t2, dt);
+    return s;
+}
+
+static inline float osc_sample(voice_t *v, uint32_t phase, uint32_t inc, int wave)
 {
     const float t  = phase * PHASE_SCALE;
     const float dt = inc * PHASE_SCALE;
@@ -108,14 +123,19 @@ static inline float osc_sample(uint32_t phase, uint32_t inc, int wave)
     switch (wave) {
     case SYNTH_WAVE_SAW:
         return 2.f * t - 1.f - poly_blep(t, dt);
-    case SYNTH_WAVE_SQUARE: {
-        float s = t < 0.5f ? 1.f : -1.f;
-        s += poly_blep(t, dt);
-        float t2 = t + 0.5f;
-        if (t2 >= 1.f) t2 -= 1.f;
-        s -= poly_blep(t2, dt);
-        return s;
+    case SYNTH_WAVE_SQUARE:
+        return pulse_wave(t, dt, 0.5f);
+    case SYNTH_WAVE_PWM: {
+        float w = s_params.pwm;
+        if (w < 0.05f) w = 0.05f;
+        if (w > 0.95f) w = 0.95f;
+        return pulse_wave(t, dt, w);
     }
+    case SYNTH_WAVE_NOISE:
+        v->rng ^= v->rng << 13;
+        v->rng ^= v->rng >> 17;
+        v->rng ^= v->rng << 5;
+        return (float)(v->rng >> 9) * (1.f / 8388608.f) - 1.f;
     case SYNTH_WAVE_TRI:
         return t < 0.5f ? 4.f * t - 1.f : 3.f - 4.f * t;
     case SYNTH_WAVE_SINE:
@@ -241,9 +261,12 @@ int synth_active_voices(void)
 
 void synth_render(float *stereo_buf, size_t frames)
 {
-    const int   wave   = s_params.waveform;
+    const int   wave1  = s_params.wave1;
+    const int   wave2  = s_params.wave2;
     const float master = s_params.master;
-    const bool  dual   = s_params.detune > 0.005f;
+    const float mix1   = 1.f - s_params.osc_mix;
+    const float mix2   = s_params.osc_mix;
+    const bool  dual   = mix2 > 0.001f;
     const float gk     = s_params.glide_s > 0.0005f
                          ? 1.f / (s_params.glide_s * s_sample_rate + 1.f) : 1.f;
     // envelope rates once per block — not per-sample divisions
@@ -267,8 +290,8 @@ void synth_render(float *stereo_buf, size_t frames)
             voice_t *vc = &s_voices[v];
             if (vc->env_stage == ENV_IDLE) continue;
 
-            float o = osc_sample(vc->phase, (uint32_t)vc->inc, wave);
-            if (dual) o = (o + osc_sample(vc->phase2, (uint32_t)vc->inc2, wave)) * 0.7f;
+            float o = osc_sample(vc, vc->phase, (uint32_t)vc->inc, wave1) * mix1;
+            if (dual) o += osc_sample(vc, vc->phase2, (uint32_t)vc->inc2, wave2) * mix2;
 
             // TPT SVF -> lowpass out
             float v3  = o - vc->svf_ic2;

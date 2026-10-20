@@ -28,7 +28,10 @@ bool web_user_played(void)
 static void apply_param(const char *name, double value)
 {
     synth_params_t *p = synth_params();
-    if      (!strcmp(name, "wave"))      p->waveform   = (int)value;
+    if      (!strcmp(name, "wave1"))     p->wave1      = (int)value;
+    else if (!strcmp(name, "wave2"))     p->wave2      = (int)value;
+    else if (!strcmp(name, "osc_mix"))   p->osc_mix    = value;
+    else if (!strcmp(name, "pwm"))       p->pwm        = value;
     else if (!strcmp(name, "detune"))    p->detune     = value;
     else if (!strcmp(name, "spread"))    p->spread     = value;
     else if (!strcmp(name, "cutoff"))    p->cutoff     = value;

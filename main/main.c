@@ -9,7 +9,7 @@
 #include "freertos/task.h"
 
 static const char *TAG = "main";
-static const char *wave_names[] = {"sine", "saw", "square", "tri"};
+static const char *wave_names[] = {"sine", "saw", "square", "tri", "pwm", "noise"};
 
 // health monitor: logs heap + audio throughput every 10 s so we can see leaks/stalls
 static void stats_task(void *arg)
@@ -56,7 +56,8 @@ void app_main(void)
     // Demo plays until a MIDI device or the web UI sends its first note
     int wave = SYNTH_WAVE_SAW;
     while (!usb_midi_seen_activity() && !web_user_played()) {
-        synth_params()->waveform = wave;
+        synth_params()->wave1 = wave;
+        synth_params()->wave2 = wave;
         ESP_LOGI(TAG, "waveform: %s", wave_names[wave]);
 
         for (int i = 0; i < n_arp; i++) {

@@ -14,7 +14,9 @@
   #status { font-size: 12px; color: #666; }
   #status::before { content: "●"; margin-right: 6px; }
   #status.on { color: #6f6; } #status.off { color: #f66; }
-  .panel { width: 100%; max-width: 420px; background: #1d1f24; border-radius: 12px; padding: 12px 14px; }
+  .deck { display: flex; flex-wrap: wrap; gap: 14px; justify-content: center;
+          width: 100%; max-width: 1160px; }
+  .panel { width: min(340px, 100%); background: #1d1f24; border-radius: 12px; padding: 12px 14px; }
   .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 16px; }
   .waves { display: flex; gap: 8px; margin-bottom: 10px; }
   .waves button, .oct button { flex: 1; padding: 9px 0; border: 1px solid #333; border-radius: 8px;
@@ -26,7 +28,7 @@
   .oct { display: flex; gap: 8px; }
   .oct button { flex: none; padding: 9px 18px; font-size: 15px; }
   #octval { flex: 1; text-align: center; align-self: center; color: #888; }
-  #keys { position: relative; height: 150px; max-width: 420px; width: 100%; }
+  #keys { position: relative; height: 150px; max-width: 640px; width: 100%; }
   .key { position: absolute; top: 0; border: 1px solid #111; border-radius: 0 0 4px 4px;
          cursor: pointer; }
   .key.w { background: #eee; height: 100%; z-index: 1; }
@@ -38,6 +40,8 @@
 <body>
 <h1>esp32-s3 synth</h1>
 <div id="status" class="off">disconnected</div>
+
+<div class="deck">
 
 <div class="panel">
   <div class="waves" id="ptabs">
@@ -105,6 +109,18 @@
 </div>
 
 <div class="panel">
+  <h2>chorus</h2>
+  <div class="grid">
+    <div class="slider"><label>rate <span id="v-chorus_rate">0.80</span></label>
+      <input id="p-chorus_rate" type="range" min="0.05" max="5" step="0.01" value="0.8"></div>
+    <div class="slider"><label>depth <span id="v-chorus_depth">0.35</span></label>
+      <input id="p-chorus_depth" type="range" min="0" max="1" step="0.01" value="0.35"></div>
+    <div class="slider"><label>mix <span id="v-chorus_mix">0.12</span></label>
+      <input id="p-chorus_mix" type="range" min="0" max="0.5" step="0.01" value="0.12"></div>
+  </div>
+</div>
+
+<div class="panel">
   <h2>delay</h2>
   <div class="grid">
     <div class="slider"><label>time ms <span id="v-delay_ms">380</span></label>
@@ -119,6 +135,18 @@
 </div>
 
 <div class="panel">
+  <h2>reverb</h2>
+  <div class="grid">
+    <div class="slider"><label>room <span id="v-rev_room">0.55</span></label>
+      <input id="p-rev_room" type="range" min="0" max="1" step="0.01" value="0.55"></div>
+    <div class="slider"><label>damp <span id="v-rev_damp">0.40</span></label>
+      <input id="p-rev_damp" type="range" min="0" max="1" step="0.01" value="0.4"></div>
+    <div class="slider"><label>wet <span id="v-rev_wet">0.15</span></label>
+      <input id="p-rev_wet" type="range" min="0" max="0.5" step="0.01" value="0.15"></div>
+  </div>
+</div>
+
+<div class="panel">
   <h2>bus</h2>
   <div class="grid">
     <div class="slider"><label>comp thresh <span id="v-comp_thresh">0.60</span></label>
@@ -129,6 +157,8 @@
       <input id="p-master" type="range" min="0" max="1" step="0.01" value="0.6"></div>
   </div>
 </div>
+
+</div><!-- /.deck -->
 
 <div class="panel oct">
   <button id="octdown">−</button>

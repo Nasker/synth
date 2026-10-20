@@ -89,6 +89,12 @@ static synth_patch_t s_patches[SYNTH_NUM_PARTS] = {
 };
 
 static synth_fx_t s_fx = {
+    .chorus_rate  = 0.8f,
+    .chorus_depth = 0.35f,
+    .chorus_mix   = 0.12f,
+    .rev_room     = 0.55f,
+    .rev_damp     = 0.4f,
+    .rev_wet      = 0.15f,
     .delay_ms   = 380.f,
     .delay_fb   = 0.35f,
     .delay_mix  = 0.18f,

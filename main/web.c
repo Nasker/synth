@@ -45,6 +45,12 @@ static void apply_param(const char *name, double value, int part)
     else if (!strcmp(name, "sustain"))   p->sustain    = value;
     else if (!strcmp(name, "release"))   p->release_s  = value;
     else if (!strcmp(name, "glide"))     p->glide_s    = value;
+    else if (!strcmp(name, "chorus_rate")) f->chorus_rate  = value;
+    else if (!strcmp(name, "chorus_depth"))f->chorus_depth = value;
+    else if (!strcmp(name, "chorus_mix"))  f->chorus_mix   = value;
+    else if (!strcmp(name, "rev_room"))    f->rev_room     = value;
+    else if (!strcmp(name, "rev_damp"))    f->rev_damp     = value;
+    else if (!strcmp(name, "rev_wet"))     f->rev_wet      = value;
     else if (!strcmp(name, "delay_ms"))  f->delay_ms   = value;
     else if (!strcmp(name, "delay_fb"))  f->delay_fb   = value;
     else if (!strcmp(name, "delay_mix")) f->delay_mix  = value;
@@ -82,6 +88,12 @@ static esp_err_t send_full_state(httpd_req_t *req)
     }
     const synth_fx_t *fx = synth_fx_params();
     cJSON *f = cJSON_AddObjectToObject(root, "fx");
+    cJSON_AddNumberToObject(f, "chorus_rate",  fx->chorus_rate);
+    cJSON_AddNumberToObject(f, "chorus_depth", fx->chorus_depth);
+    cJSON_AddNumberToObject(f, "chorus_mix",   fx->chorus_mix);
+    cJSON_AddNumberToObject(f, "rev_room",     fx->rev_room);
+    cJSON_AddNumberToObject(f, "rev_damp",     fx->rev_damp);
+    cJSON_AddNumberToObject(f, "rev_wet",      fx->rev_wet);
     cJSON_AddNumberToObject(f, "delay_ms",    fx->delay_ms);
     cJSON_AddNumberToObject(f, "delay_fb",    fx->delay_fb);
     cJSON_AddNumberToObject(f, "delay_mix",   fx->delay_mix);

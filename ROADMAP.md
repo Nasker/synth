@@ -23,10 +23,13 @@
 
 ## Phase C — FX chain (order: chorus -> delay -> reverb -> comp)
 
-- [ ] Chorus: 2× LFO-modulated ~15–25ms delay lines, internal RAM, mix param
-- [ ] Freeverb: 8 combs + 4 allpasses per channel in PSRAM (~250KB),
-      roomsize / damp / wet params
-- [ ] FX param namespace in web UI + params struct
+- [x] Chorus: 2× LFO-modulated 12–22ms delay lines, internal RAM,
+      rate/depth/mix params
+- [x] Freeverb: 8 combs + 4 allpasses per channel in PSRAM (~97KB),
+      room / damp / wet params
+- [x] FX param namespace in web UI + params struct
+- [ ] Reverb optimization headroom: LUT sine for chorus LFO,
+      half-rate reverb option if high-polyphony render gets tight
 
 ## Phase D — persistence & polish
 

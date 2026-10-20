@@ -40,10 +40,16 @@ typedef struct {
 
 // Global FX-bus parameters shared by all parts
 typedef struct {
+    volatile float chorus_rate;    // Hz
+    volatile float chorus_depth;   // 0..1 -> up to ~10ms of modulation
+    volatile float chorus_mix;     // 0..0.5 wet
     volatile float delay_ms;       // 0 disables
     volatile float delay_fb;       // 0..0.95
     volatile float delay_mix;      // 0..0.5 wet
     volatile float delay_damp;     // 0..1 darkening in feedback
+    volatile float rev_room;       // 0..1 room size
+    volatile float rev_damp;       // 0..1 high-frequency damping
+    volatile float rev_wet;        // 0..0.5 wet
     volatile float comp_thresh;    // 0.3..1 onset level
     volatile float comp_ratio;     // 1..10
     volatile float master;         // 0..1

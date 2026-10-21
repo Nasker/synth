@@ -33,7 +33,8 @@
 
 ## Phase D — persistence & polish
 
-- [ ] Preset slots in NVS (save/load/name, 8–16 slots, per part)
+- [x] Preset slots in NVS (8 slots, both parts + fx + name per blob,
+      auto-restores last used slot at boot)
 - [ ] Voice steal quick-fade (kills steal clicks)
 - [ ] OTA via the two app slots (needs partition tweak)
 

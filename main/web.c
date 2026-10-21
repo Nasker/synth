@@ -10,12 +10,23 @@
 #include "esp_log.h"
 #include "esp_netif.h"
 #include "esp_wifi.h"
+#include "nvs.h"
 #include "nvs_flash.h"
 
 #define AP_SSID "esp32-synth"
+#define NUM_PRESETS  8
+#define PRESET_MAGIC 0x53595250   // 'SYRP'
+
+typedef struct {
+    uint32_t      magic;
+    char          name[16];
+    synth_patch_t patch[SYNTH_NUM_PARTS];
+    synth_fx_t    fx;
+} preset_blob_t;
 
 static const char *TAG = "web";
 static volatile bool s_user_played;
+static nvs_handle_t s_nvs;
 
 extern const uint8_t index_html_start[] asm("_binary_index_html_start");
 extern const uint8_t index_html_end[]   asm("_binary_index_html_end");
@@ -60,6 +71,38 @@ static void apply_param(const char *name, double value, int part)
     else if (!strcmp(name, "master"))    f->master     = value;
 }
 
+static void preset_save(int slot, const char *name)
+{
+    if (slot < 0 || slot >= NUM_PRESETS) return;
+    preset_blob_t b = {0};
+    b.magic = PRESET_MAGIC;
+    strlcpy(b.name, name && *name ? name : "preset", sizeof(b.name));
+    memcpy(b.patch, synth_patch(0), sizeof(b.patch));
+    memcpy(&b.fx, synth_fx_params(), sizeof(b.fx));
+    char key[8];
+    snprintf(key, sizeof(key), "p%d", slot);
+    nvs_set_blob(s_nvs, key, &b, sizeof(b));
+    nvs_set_u8(s_nvs, "last", (uint8_t)slot);
+    nvs_commit(s_nvs);
+}
+
+static bool preset_load(int slot)
+{
+    if (slot < 0 || slot >= NUM_PRESETS) return false;
+    preset_blob_t b;
+    char key[8];
+    snprintf(key, sizeof(key), "p%d", slot);
+    size_t len = sizeof(b);
+    if (nvs_get_blob(s_nvs, key, &b, &len) != ESP_OK || b.magic != PRESET_MAGIC) {
+        return false;
+    }
+    memcpy(synth_patch(0), b.patch, sizeof(b.patch));
+    memcpy(synth_fx_params(), &b.fx, sizeof(b.fx));
+    nvs_set_u8(s_nvs, "last", (uint8_t)slot);
+    nvs_commit(s_nvs);
+    return true;
+}
+
 // full state push: parts + fx, so the UI can populate both part tabs
 static esp_err_t send_full_state(httpd_req_t *req)
 {
@@ -102,6 +145,20 @@ static esp_err_t send_full_state(httpd_req_t *req)
     cJSON_AddNumberToObject(f, "comp_ratio",  fx->comp_ratio);
     cJSON_AddNumberToObject(f, "master",      fx->master);
 
+    cJSON *pl = cJSON_AddArrayToObject(root, "presets");
+    for (int i = 0; i < NUM_PRESETS; i++) {
+        preset_blob_t b;
+        char key[8];
+        snprintf(key, sizeof(key), "p%d", i);
+        size_t len = sizeof(b);
+        bool used = nvs_get_blob(s_nvs, key, &b, &len) == ESP_OK &&
+                    b.magic == PRESET_MAGIC;
+        cJSON *o = cJSON_CreateObject();
+        cJSON_AddBoolToObject(o, "used", used);
+        cJSON_AddStringToObject(o, "name", used ? b.name : "");
+        cJSON_AddItemToArray(pl, o);
+    }
+
     char *txt = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
     if (!txt) return ESP_ERR_NO_MEM;
@@ -143,6 +200,19 @@ static void handle_ws_msg(httpd_req_t *req, const char *msg)
         }
     } else if (!strcmp(type->valuestring, "get_state")) {
         send_full_state(req);
+    } else if (!strcmp(type->valuestring, "preset")) {
+        const cJSON *op   = cJSON_GetObjectItem(j, "op");
+        const cJSON *slot = cJSON_GetObjectItem(j, "slot");
+        if (cJSON_IsString(op) && cJSON_IsNumber(slot)) {
+            if (!strcmp(op->valuestring, "save")) {
+                const cJSON *nm = cJSON_GetObjectItem(j, "name");
+                preset_save(slot->valueint,
+                            cJSON_IsString(nm) ? nm->valuestring : NULL);
+                send_full_state(req);   // refresh slot names
+            } else if (!strcmp(op->valuestring, "load")) {
+                if (preset_load(slot->valueint)) send_full_state(req);
+            }
+        }
     }
     cJSON_Delete(j);
 }
@@ -222,6 +292,11 @@ static void start_ap(void)
 void web_start(void)
 {
     start_ap();
+    nvs_open("synth", NVS_READWRITE, &s_nvs);
+    uint8_t last;
+    if (nvs_get_u8(s_nvs, "last", &last) == ESP_OK && preset_load(last)) {
+        ESP_LOGI(TAG, "restored preset slot %d", last);
+    }
     start_httpd();
     ESP_LOGI(TAG, "AP '%s' up — connect and browse to http://192.168.4.1", AP_SSID);
 }
